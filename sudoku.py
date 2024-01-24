@@ -263,12 +263,30 @@ if __name__ == "__main__":
         su.load(puzzle1)
         su.draw(window)
 
+        text = "Any key to start"
+        y = 16
+        x = int(curses.COLS/2 - len(text)/2)
+        window.addstr(y, x, text)
+
         window.getch()
+        window.addstr(y, x, text, curses.A_REVERSE)
+        window.refresh()
+        time.sleep(0.2)
+        window.addstr(y, x, text)
+        window.refresh()
+        time.sleep(0.1)
+        window.addstr(y, x, " " * len(text))
+        window.refresh()               
 
         try:
             su.solve()
         except PuzzleSolved:
             pass
+
+        text = "Solved!"
+        x = int(curses.COLS/2 - len(text)/2)
+        window.addstr(y, x, text)
+
         window.getch()
 
     wrapper(main)
