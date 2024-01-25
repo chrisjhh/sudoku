@@ -22,6 +22,7 @@ class cell:
         self.potentialValues: list[int] = []
         self.drawPos = None 
         self.drawAtrr = 0
+        self._snapshot = None
 
     def complete(self) -> bool:
         return self.value is not None
@@ -51,6 +52,21 @@ class cell:
             if group.hasValue(value):
                 return False
         return True
+    
+    def takeSnapshot(self):
+        if self.complete():
+            return
+        self._snapshot = self.potentialValues[:]
+        self.drawAtrr = curses.color_pair(3)
+
+    def restoreSnapshot(self):
+        if self._snapshot is None:
+            return
+        self.value = None
+        self.potentialValues = self._snapshot[:]
+        self._snapshot = None
+        self.drawAtrr = 0
+
 
 
 class CellGroup:
@@ -361,6 +377,7 @@ class sudoku:
         curses.curs_set(False)
         curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
         curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
+        curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK)
         width = (3 + 4) * 3 + 4
         gap = int((curses.COLS - width) / 2)
         dashRow = "-" * width
@@ -396,10 +413,10 @@ class sudoku:
     def setCell(self, cell:cell, value: int):
         logging.info("setCell: value={}".format(value))
         cell.setValue(value)
-        self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value), curses.A_REVERSE)
+        self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value), curses.A_REVERSE | cell.drawAtrr)
         self.window.refresh()
         time.sleep(0.2)
-        self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value))
+        self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value), cell.drawAtrr)
         self.window.refresh()
         self.foundThisPass += 1
         if self.solved():
@@ -434,6 +451,42 @@ class sudoku:
             yield c
         for b in self.boxes:
             yield b
+
+    def startPreview(self):
+        for row in self.cells:
+            for cell in row:
+                cell.takeSnapshot()
+
+    def endPreview(self):
+        for row in self.cells:
+            for cell in row:
+                cell.restoreSnapshot()
+                if not cell.complete():
+                    self.window.addstr(cell.drawPos[0], cell.drawPos[1], " ")
+        self.window.refresh()
+
+    def trialValue(self, cell: cell, value: int):
+        logging.info("Trialing {} in {}".format(value, cell))
+        self.startPreview()
+        try:
+            self.setCell(cell, value)
+        except PuzzleSolved:
+            self.endPreview()
+            # Do it for real!
+            self.setCell(cell, value)
+        
+        self.endPreview()
+        logging.info("End of trial")
+
+    def tryAllValues(self):
+        for row in self.cells:
+            for cell in row:
+                if cell.complete():
+                    continue
+                # Take copy
+                trialValues = cell.potentialValues[:]
+                for val in trialValues:
+                    self.trialValue(cell, val)
 
 
     def solve(self):
@@ -473,6 +526,10 @@ class sudoku:
                 # Look for triples
                 for group in self.groups():
                     group.findTriples(self.setCell, self.window)
+            if self.foundThisPass == 0:
+                # Last resort
+                self.tryAllValues()
+
             #if self.foundThisPass == 0:
             # We are stuck!
             #    break
