@@ -3,7 +3,7 @@ import curses
 import time
 
 import logging
-logging.basicConfig(filename="sudoku_log", level=logging.DEBUG)
+logging.basicConfig(filename="sudoku_log", level=logging.DEBUG, filemode='w')
 
 if TYPE_CHECKING:
     from curses import _CursesWindow
@@ -15,9 +15,9 @@ class PuzzleSolved(Exception):
 class cell:
 
     def __init__(self) -> None:
-        self.row = None
-        self.col = None
-        self.box = None
+        self.row: CellRow = None
+        self.col: CellCol = None
+        self.box: CellBox = None
         self.value: int = None
         self.potentialValues: list[int] = []
         self.drawPos = None 
@@ -86,6 +86,65 @@ class CellGroup:
                 logging.debug("There is only one option so call setCell()")
                 setCell(potentials[0], x)
 
+    def findPairs(self, setCell, window: '_CursesWindow'):
+        """We may not be able to pin a value to a unique cell, but if we have two numbers that can both only be
+        in the same two cells then no other posibile values are valid for these two cells. This may help us
+        pin down where the other numbers should be
+        """
+        pairs = []
+        logging.debug("Finding pairs in group {}".format(self))
+        for x in range(1,10):
+            if self.hasValue(x):
+                logging.debug("{} is already in the group".format(x))
+                continue
+            potentials = [c for c in self if x in c.potentialValues]
+            logging.debug("{} could be in {} cells in this group".format(x, len(potentials)))
+            if len(potentials) == 0:
+                raise Exception("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
+            if len(potentials) == 2:
+                logging.debug("We have found a pair")
+                pairs.append((x, (potentials[0], potentials[1])))
+        
+        if len(pairs) > 1:
+            logging.debug("We have some pairs. Check if any are the same")
+            for p1 in pairs:
+                (v1, cellPair1) = p1
+                it = iter(pairs)
+                p2 = next(it)
+                while p2 != p1:
+                    p2 = next(it)
+                for p2 in it:
+                    (v2, cellPair2) = p2
+                    logging.debug("Comparing pairs for values {} and {}".format(v1, v2))
+                    if cellPair1 == cellPair2:
+                        logging.debug("They are the same")
+                        logging.debug("Remove any possible values in these cells that are not the two values matched")
+                        doneFlash = False
+                        for cell in cellPair1:
+                            logging.debug("Potential values before {}".format(cell.potentialValues))
+                            if len(cell.potentialValues) > 2:
+                                if not doneFlash:
+                                    # Flash the values we are using in red the first time they are used
+                                    for c in cellPair1:
+                                        window.addstr(c.drawPos[0], c.drawPos[1], str(v1), curses.color_pair(2))
+                                    window.refresh()
+                                    time.sleep(0.2)
+                                    for c in cellPair1:
+                                        window.addstr(c.drawPos[0], c.drawPos[1], str(v2), curses.color_pair(2))
+                                    window.refresh()
+                                    time.sleep(0.2)
+                                    for c in cellPair1:
+                                        window.addstr(c.drawPos[0], c.drawPos[1], " ")
+                                    window.refresh()
+                                    doneFlash = True
+                                cell.potentialValues = [v1, v2]
+                                logging.debug("Potential values after {}".format(cell.potentialValues))
+                                # Process the effected groups
+                                for group in cell.groups():
+                                    if not group.complete():
+                                        group.processPotentials(setCell)
+
+
 class CellRow(CellGroup):
 
     def __init__(self, cells: list[cell]):
@@ -101,12 +160,85 @@ class CellCol(CellGroup):
         for cell in cells:
             cell.col = self
 
+def inSameRow(cells: list[cell]) -> bool:
+    lastRow = None
+    for cell in cells:
+        if lastRow is not None and cell.row != lastRow:
+            return False
+        lastRow = cell.row
+    return True
+
+def inSameCol(cells: list[cell]) -> bool:
+    lastCol = None
+    for cell in cells:
+        if lastCol is not None and cell.col != lastCol:
+            return False
+        lastCol = cell.col
+    return True
+
 class CellBox(CellGroup):
 
     def __init__(self, cells: list[cell]):
         super().__init__(cells)
         for cell in cells:
             cell.box = self
+
+    def findRowsAndCols(self, setCell, window: '_CursesWindow'):
+        """We may not be able to pin a value to a unique cell, but if all the possible cells for a value in a box
+        occur in the same row or column, then we can use this fact to eliminate this value as a possibility in
+        the cells of the same row or column in the other boxes.
+        """
+        logging.debug("Check for values in the same row or column in box {}".format(self))
+        for x in range(1,10):
+            if self.hasValue(x):
+                logging.debug("{} is already in the box".format(x))
+                continue
+            potentialCells = [c for c in self if x in c.potentialValues]
+            logging.debug("{} could be in {} cells in this group".format(x, len(potentialCells)))
+            if len(potentialCells) == 0:
+                raise Exception("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
+            groupToUpdate = None
+            if len(potentialCells) <= 3:
+                logging.debug("Check if these cells are in the same row or column")
+                if inSameRow(potentialCells):
+                    logging.debug("Cells for value {} are all in the same row.".format(x))
+                    logging.debug("Update the potential value for the other cells in this row")
+                    groupToUpdate = potentialCells[0].row
+                elif inSameCol(potentialCells):
+                    logging.debug("Cells for value {} are all in the same column.".format(x))
+                    logging.debug("Update the potential value for the other cells in this column")
+                    groupToUpdate = potentialCells[0].col
+            if groupToUpdate is not None:
+                doneFlash = False
+                for cell in groupToUpdate:
+                    if cell.box == self:
+                        # Only want to update the potential values in the other boxes
+                        continue
+                    if cell.complete():
+                        continue
+                    if x in cell.potentialValues:
+                        if not doneFlash:
+                            # Flash the values we are using in red the first time they are used
+                            for c in potentialCells:
+                                window.addstr(c.drawPos[0], c.drawPos[1], str(x), curses.color_pair(1))
+                            window.refresh()
+                            time.sleep(0.2)
+                            for c in potentialCells:
+                                window.addstr(c.drawPos[0], c.drawPos[1], " ")
+                            window.refresh()
+                            doneFlash = True
+                        logging.debug("Potential values before {}".format(cell.potentialValues))
+                        cell.potentialValues.remove(x)
+                        logging.debug("Potential values after {}".format(cell.potentialValues))
+                        if len(cell.potentialValues) == 1:
+                            logging.debug("Only one potential value left. Call setCell() with this value: {}".format(cell.potentialValues[0]))
+                            setCell(cell, cell.potentialValues[0])
+                        else:
+                            # Process the effected groups
+                            for group in cell.groups():
+                                if not group.complete():
+                                    group.processPotentials(setCell)
+
 
 
 class sudoku:
@@ -140,6 +272,8 @@ class sudoku:
                 self.boxes.append(CellBox(boxCells))
         # For drawing
         self.window: '_CursesWindow' = None
+        # To check if we are stuck
+        self.foundThisPass: int = 0
 
     def load(self, puzzleData: str):
         lines = [line for line in puzzleData.splitlines() if len(line) > 0 and not '-' in line]
@@ -149,7 +283,7 @@ class sudoku:
             row = self.cells[i]
             chars = [c for c in lines[i] if c != '|']
             if len(chars) != 9:
-                raise Exception("Unexpected number of chars. Expected 9 got []".format(lines[i]))
+                raise Exception("Unexpected number of chars. Expected 9 got [{}]".format(lines[i]))
             for j in range(9):
                 if chars[j] != " ":
                     row[j].setValue(int(chars[j]))
@@ -158,6 +292,8 @@ class sudoku:
     def draw(self, window: '_CursesWindow'):
         window.clear()
         curses.curs_set(False)
+        curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
+        curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
         width = (3 + 4) * 3 + 4
         gap = int((curses.COLS - width) / 2)
         dashRow = "-" * width
@@ -198,6 +334,7 @@ class sudoku:
         time.sleep(0.2)
         self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value))
         self.window.refresh()
+        self.foundThisPass += 1
         if self.solved():
             logging.debug("Puzzle solved after setCell")
             raise PuzzleSolved()
@@ -249,18 +386,33 @@ class sudoku:
             self.setCell(cell, value)
         logging.debug("Process the groups")
         for x in range(10):
+            self.foundThisPass = 0
             for group in self.groups():
                 group.processPotentials(self.setCell)
+            if self.foundThisPass == 0:
+                # We need a bit of extra help
+                # Look at the boxes to see if any values must be in certain rows or columns
+                for box in self.boxes:
+                    box.findRowsAndCols(self.setCell, self.window) 
+            if self.foundThisPass == 0:
+                # Even more help required
+                # Look for matching pairs that will exclude other posibilities
+                for group in self.groups():
+                    group.findPairs(self.setCell, self.window)
+            #if self.foundThisPass == 0:
+            # We are stuck!
+            #    break
+        logging.debug("Stuck!")
         
 
 if __name__ == "__main__":
     from curses import wrapper
-    from .data import puzzle1
+    from .data import hardest_puzzle as puzzle
 
     def main(window: '_CursesWindow'):
         su = sudoku()
         su.window = window
-        su.load(puzzle1)
+        su.load(puzzle)
         su.draw(window)
 
         text = "Any key to start"
@@ -283,7 +435,10 @@ if __name__ == "__main__":
         except PuzzleSolved:
             pass
 
-        text = "Solved!"
+        if su.solved():
+            text = "Solved!"
+        else:
+            text = "Stuck! :("
         x = int(curses.COLS/2 - len(text)/2)
         window.addstr(y, x, text)
 
