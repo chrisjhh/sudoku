@@ -407,7 +407,7 @@ class sudoku:
 
 if __name__ == "__main__":
     from curses import wrapper
-    from .data import hardest_puzzle as puzzle
+    from .data import harder_puzzle as puzzle
 
     def main(window: '_CursesWindow'):
         su = sudoku()
