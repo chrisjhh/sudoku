@@ -14,6 +14,9 @@ class PuzzleSolved(Exception):
 class BadPuzzleState(Exception):
     pass
 
+class LookAheadExceeded(Exception):
+    pass
+
 
 class cell:
 
@@ -79,7 +82,15 @@ class CellGroup:
         self.completed: int = len([x for x in cells if x.complete()])
 
     def complete(self) -> bool:
+        if self.completed > 9:
+            raise Exception("More than 9 completed cells in group!")
         return self.completed == 9
+    
+    def recomputeCompleted(self):
+        self.completed = 0
+        for cell in self:
+            if cell.complete():
+                self.completed += 1
 
     def __iter__(self):
         for cell in self.cells:
@@ -316,6 +327,8 @@ class CellBox(CellGroup):
                         logging.info("Potential values before {}".format(cell.potentialValues))
                         cell.potentialValues.remove(x)
                         logging.info("Potential values after {}".format(cell.potentialValues))
+                        if len(cell.potentialValues) == 0:
+                            raise BadPuzzleState("Cell has no remaining potential values")
                         if len(cell.potentialValues) == 1:
                             logging.info("Only one potential value left. Call setCell() with this value: {}".format(cell.potentialValues[0]))
                             setCell(cell, cell.potentialValues[0])
@@ -424,6 +437,9 @@ class sudoku:
         self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value), cell.drawAtrr)
         self.window.refresh()
         self.foundThisPass += 1
+        if hasattr(self, "_inPreview") and hasattr(self, "_lookahead") and hasattr(self, "_foundThisPass"):
+            if self.foundThisPass - self._foundThisPass > self._lookahead:
+                raise LookAheadExceeded()
         if self.solved():
             logging.info("Puzzle solved after setCell")
             raise PuzzleSolved()
@@ -451,6 +467,9 @@ class sudoku:
         if len(toSet) > 0:
             logging.info("Process list of new cells to set that now have only one potential value")
             for cell in toSet:
+                if cell.complete():
+                    # Already set as a consequence of a previous setCell
+                    continue
                 self.setCell(cell, cell.potentialValues[0])
         # Process the effected groups
         for group in cell.groups():
@@ -467,30 +486,59 @@ class sudoku:
             yield b
 
     def startPreview(self):
+        self._foundThisPass = self.foundThisPass
         for row in self.cells:
             for cell in row:
                 cell.takeSnapshot()
+        self._inPreview = True
+        self._lookahead = 10
 
     def endPreview(self):
+        if not hasattr(self, "_inPreview"):
+            return
+        delattr(self, "_inPreview")
+        delattr(self, "_lookahead")
+
         for row in self.cells:
             for cell in row:
                 cell.restoreSnapshot()
                 if not cell.complete():
                     self.window.addstr(cell.drawPos[0], cell.drawPos[1], " ")
         self.window.refresh()
+        for group in self.groups():
+            # Need to revert completed count
+            group.recomputeCompleted()
+        if hasattr(self,"_foundThisPass"):
+            self.foundThisPass = self._foundThisPass
+            delattr(self, "_foundThisPass")
 
-    def trialValue(self, cell: cell, value: int):
+    def trialValue(self, cell: cell, value: int) -> bool:
         logging.info("Trialing {} in {}".format(value, cell))
         self.startPreview()
+        initialCount = self.foundThisPass
         try:
             self.setCell(cell, value)
+        except LookAheadExceeded:
+            pass
         except PuzzleSolved:
-            self.endPreview()
             # Do it for real!
+            self.endPreview()
             self.setCell(cell, value)
+        except BadPuzzleState:
+            # Remove this value from potentials
+            self.endPreview()
+            logging.info("{} is not a potential for {} within lookahead".format(value, cell))
+            cell.potentialValues.remove(value)
+            if len(cell.potentialValues) == 0:
+                raise BadPuzzleState("No remaining potential values")
+            for group in cell.groups():
+                group.processPotentials(self.setCell)
+            return True
+                
         
         self.endPreview()
         logging.info("End of trial")
+        return False
 
     def tryAllValues(self):
         for row in self.cells:
@@ -501,7 +549,10 @@ class sudoku:
                 trialValues = cell.potentialValues[:]
                 #trialValues.reverse()
                 for val in trialValues:
-                    self.trialValue(cell, val)
+                    doneSomething = self.trialValue(cell, val)
+                    if doneSomething:
+                        return
+                   
 
 
     def solve(self):
@@ -553,7 +604,7 @@ class sudoku:
 
 if __name__ == "__main__":
     from curses import wrapper
-    from .data import harder_puzzle as puzzle
+    from .data import hardest_puzzle as puzzle
 
     def main(window: '_CursesWindow'):
         su = sudoku()
