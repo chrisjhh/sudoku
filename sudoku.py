@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 class PuzzleSolved(Exception):
     pass
 
+class BadPuzzleState(Exception):
+    pass
+
 
 class cell:
 
@@ -97,7 +100,7 @@ class CellGroup:
             potentials = [c for c in self if x in c.potentialValues]
             logging.debug("{} could be in {} cells in this group".format(x, len(potentials)))
             if len(potentials) == 0:
-                raise Exception("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
+                raise BadPuzzleState("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
             if len(potentials) == 1:
                 logging.info("There is only one option for {} in {} so call setCell()".format(x,self))
                 setCell(potentials[0], x)
@@ -116,7 +119,7 @@ class CellGroup:
             potentials = [c for c in self if x in c.potentialValues]
             logging.debug("{} could be in {} cells in this group".format(x, len(potentials)))
             if len(potentials) == 0:
-                raise Exception("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
+                raise BadPuzzleState("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
             if len(potentials) == 2:
                 logging.debug("We have found a pair")
                 pairs.append((x, (potentials[0], potentials[1])))
@@ -174,7 +177,7 @@ class CellGroup:
             potentials = [c for c in self if x in c.potentialValues]
             logging.debug("{} could be in {} cells in this group".format(x, len(potentials)))
             if len(potentials) == 0:
-                raise Exception("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
+                raise BadPuzzleState("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
             if len(potentials) == 3:
                 logging.debug("We have found a triple")
                 triples.append((x, (potentials[0], potentials[1], potentials[2])))
@@ -279,7 +282,7 @@ class CellBox(CellGroup):
             potentialCells = [c for c in self if x in c.potentialValues]
             logging.debug("{} could be in {} cells in this group".format(x, len(potentialCells)))
             if len(potentialCells) == 0:
-                raise Exception("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
+                raise BadPuzzleState("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
             groupToUpdate = None
             if len(potentialCells) <= 3:
                 logging.debug("Check if these cells are in the same row or column")
@@ -412,6 +415,8 @@ class sudoku:
     
     def setCell(self, cell:cell, value: int):
         logging.info("setCell: value={}".format(value))
+        if not cell.isPotentialValue(value):
+            raise BadPuzzleState("Trying to set value for a cell that is not allowed")
         cell.setValue(value)
         self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value), curses.A_REVERSE | cell.drawAtrr)
         self.window.refresh()
@@ -423,6 +428,7 @@ class sudoku:
             logging.info("Puzzle solved after setCell")
             raise PuzzleSolved()
         # Remove this value as a potential value from the cells groups
+        toSet: list[cell] = []
         for group in cell.groups():
             logging.debug("Removing potential value from cells in {}".format(group))
             if group.complete():
@@ -435,9 +441,17 @@ class sudoku:
                     logging.info("Potential values before {}".format(cell.potentialValues))
                     cell.potentialValues.remove(value)
                     logging.info("Potential values after {}".format(cell.potentialValues))
+                    if len(cell.potentialValues) == 0:
+                        raise BadPuzzleState("Number of potential values for a cell has reached zero")
                     if len(cell.potentialValues) == 1:
-                        logging.info("Only one potential value left. Call setCell() with this value: {}".format(cell.potentialValues[0]))
-                        self.setCell(cell, cell.potentialValues[0])
+                        logging.info("Only one potential value left {}. Add to list of cells to set".format(cell.potentialValues[0]))
+                        # Set this cell, but only after we have finished updating the potential values of the other cells
+                        toSet.append(cell)
+        # Now update the other cells that now have only one potential value left
+        if len(toSet) > 0:
+            logging.info("Process list of new cells to set that now have only one potential value")
+            for cell in toSet:
+                self.setCell(cell, cell.potentialValues[0])
         # Process the effected groups
         for group in cell.groups():
             if not group.complete():
@@ -485,6 +499,7 @@ class sudoku:
                     continue
                 # Take copy
                 trialValues = cell.potentialValues[:]
+                #trialValues.reverse()
                 for val in trialValues:
                     self.trialValue(cell, val)
 
