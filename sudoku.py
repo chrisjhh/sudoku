@@ -1,4 +1,4 @@
-from typing import Generator, TYPE_CHECKING
+from typing import Generator, Callable, TypeAlias, TypeVar, TYPE_CHECKING
 import curses
 import time
 
@@ -17,6 +17,13 @@ class BadPuzzleState(Exception):
 class LookAheadExceeded(Exception):
     pass
 
+T = TypeVar('T')
+
+def listify(itemOrList: T | list[T]) -> list[T]:
+    try:
+        return list(itemOrList)
+    except TypeError:
+        return [itemOrList]
 
 class cell:
 
@@ -73,7 +80,8 @@ class cell:
         self._snapshot = None
         self.drawAtrr = 0
 
-
+setCell: TypeAlias = Callable[[cell, int], None]
+flashCellValues: TypeAlias = Callable[[cell | list[cell], int | list[int], int | list[int], float], None]
 
 class CellGroup:
 
@@ -102,7 +110,7 @@ class CellGroup:
                 return True
         return False
     
-    def processPotentials(self, setCell):
+    def processPotentials(self, setCell: setCell):
         logging.debug("Check group {}".format(self))
         for x in range(1,10):
             if self.hasValue(x):
@@ -116,7 +124,7 @@ class CellGroup:
                 logging.info("There is only one option for {} in {} so call setCell()".format(x,self))
                 setCell(potentials[0], x)
 
-    def findPairs(self, setCell, window: '_CursesWindow'):
+    def findPairs(self, setCell: setCell, flashCellValues: flashCellValues):
         """We may not be able to pin a value to a unique cell, but if we have two numbers that can both only be
         in the same two cells then no other posibile values are valid for these two cells. This may help us
         pin down where the other numbers should be
@@ -155,17 +163,7 @@ class CellGroup:
                             if len(cell.potentialValues) > 2:
                                 if not doneFlash:
                                     # Flash the values we are using in cyan the first time they are used
-                                    for c in cellPair1:
-                                        window.addstr(c.drawPos[0], c.drawPos[1], str(v1), curses.color_pair(2))
-                                    window.refresh()
-                                    time.sleep(0.4)
-                                    for c in cellPair1:
-                                        window.addstr(c.drawPos[0], c.drawPos[1], str(v2), curses.color_pair(2))
-                                    window.refresh()
-                                    time.sleep(0.4)
-                                    for c in cellPair1:
-                                        window.addstr(c.drawPos[0], c.drawPos[1], " ")
-                                    window.refresh()
+                                    flashCellValues(cellPair1, (v1,v2), curses.color_pair(2), 0.4)
                                     doneFlash = True
                                 logging.info("Adjusting possible values for pair of {} and {} in {}".format(v1, v2, self))
                                 logging.info("Potential values before {}".format(cell.potentialValues))
@@ -176,11 +174,15 @@ class CellGroup:
                                     if not group.complete():
                                         group.processPotentials(setCell)
 
-    def findTriples(self, setCell, window: '_CursesWindow'):
+    def findTriples(self, setCell: setCell, flashCellValues: flashCellValues):
+        self.findGrouping(3, setCell, flashCellValues)
+
+
+    def findGrouping(self, groupSize: int, setCell: setCell, flashCellValues: flashCellValues):
         """As with find pairs if we have three values that share the same three cells this must be exclusive to any other values
         """
-        triples = []
-        logging.debug("Finding triples in group {}".format(self))
+        groupings = []
+        logging.debug("Finding groups of {} in group {}".format(groupSize, self))
         for x in range(1,10):
             if self.hasValue(x):
                 logging.debug("{} is already in the group".format(x))
@@ -189,52 +191,38 @@ class CellGroup:
             logging.debug("{} could be in {} cells in this group".format(x, len(potentials)))
             if len(potentials) == 0:
                 raise BadPuzzleState("There are no potentials for {}. This should not happen. {}".format(x, ", ".join([str(c.potentialValues) for c in self])))
-            if len(potentials) == 3:
-                logging.debug("We have found a triple")
-                triples.append((x, (potentials[0], potentials[1], potentials[2])))
+            if len(potentials) == groupSize:
+                logging.debug("We have found a group of {}".format(groupSize))
+                groupings.append((x, potentials))
         
-        if len(triples) > 2:
-            logging.info("We have some triples in {}. Check if any three are the same".format(self))
-            for t1 in triples:
-                (v1, cellTriple1) = t1
-                it = iter(triples)
+        if len(groupings) >= groupSize:
+            logging.info("We have some groups of {} in {}. Check if any three are the same".format(groupSize, self))
+            for t1 in groupings:
+                (v1, cellGrouping1) = t1
+                it = iter(groupings)
                 t2 = next(it)
                 while t2 != t1:
                     t2 = next(it)
                 matched = []
                 for t2 in it:
-                    (v2, cellTriple2) = t2
-                    logging.info("Comparing pairs for values {} and {}".format(v1, v2))
-                    if cellTriple1 == cellTriple2:
+                    (v2, cellGrouping2) = t2
+                    logging.info("Comparing groupings for values {} and {}".format(v1, v2))
+                    if cellGrouping1 == cellGrouping2:
                         logging.info("They are the same")
                         matched.append(v2)
-                        if len(matched) == 1:
-                            logging.info("Need to find one more")
-                        elif len(matched) == 2:
-                            logging.info("Found all three to make an exclusive triple. Remove any other potential values")
+                        if len(matched) < groupSize - 1:
+                            logging.info("Need to find more")
+                        elif len(matched) == groupSize - 1:
+                            logging.info("Found all groupings to make an exclusive set. Remove any other potential values")
                             doneFlash = False
-                            for cell in cellTriple1:
+                            for cell in cellGrouping1:
                                 logging.info("Potential values before {}".format(cell.potentialValues))
-                                if len(cell.potentialValues) > 3:
+                                if len(cell.potentialValues) > groupSize:
                                     if not doneFlash:
                                         # Flash the values we are using in cyan the first time they are used
-                                        for c in cellTriple1:
-                                            window.addstr(c.drawPos[0], c.drawPos[1], str(v1), curses.color_pair(2))
-                                        window.refresh()
-                                        time.sleep(0.4)
-                                        for c in cellTriple1:
-                                            window.addstr(c.drawPos[0], c.drawPos[1], str(matched[0]), curses.color_pair(2))
-                                        window.refresh()
-                                        time.sleep(0.4)
-                                        for c in cellTriple1:
-                                            window.addstr(c.drawPos[0], c.drawPos[1], str(matched[1]), curses.color_pair(2))
-                                        window.refresh()
-                                        time.sleep(0.4)
-                                        for c in cellTriple1:
-                                            window.addstr(c.drawPos[0], c.drawPos[1], " ")
-                                        window.refresh()
+                                        flashCellValues(cellGrouping1, [v1, *matched], curses.color_pair(2), 0.4)
                                         doneFlash = True
-                                    cell.potentialValues = [v1, matched[0], matched[1]]
+                                    cell.potentialValues = [v1, *matched]
                                     logging.info("Potential values after {}".format(cell.potentialValues))
                                     # Process the effected groups
                                     for group in cell.groups():
@@ -280,7 +268,7 @@ class CellBox(CellGroup):
         for cell in cells:
             cell.box = self
 
-    def findRowsAndCols(self, setCell, window: '_CursesWindow'):
+    def findRowsAndCols(self, setCell, flashCellValues):
         """We may not be able to pin a value to a unique cell, but if all the possible cells for a value in a box
         occur in the same row or column, then we can use this fact to eliminate this value as a possibility in
         the cells of the same row or column in the other boxes.
@@ -316,13 +304,7 @@ class CellBox(CellGroup):
                     if x in cell.potentialValues:
                         if not doneFlash:
                             # Flash the values we are using in red the first time they are used
-                            for c in potentialCells:
-                                window.addstr(c.drawPos[0], c.drawPos[1], str(x), curses.color_pair(1))
-                            window.refresh()
-                            time.sleep(0.4)
-                            for c in potentialCells:
-                                window.addstr(c.drawPos[0], c.drawPos[1], " ")
-                            window.refresh()
+                            flashCellValues(potentialCells, x, curses.color_pair(1), 0.4)
                             doneFlash = True
                         logging.info("Potential values before {}".format(cell.potentialValues))
                         cell.potentialValues.remove(x)
@@ -419,6 +401,37 @@ class sudoku:
             y += 1
             nRow += 1
         window.addstr(y, gap, dashRow)
+
+    def flashCellValues(self, cells: cell | list[cell], values: int | list[int] = None, attrs: int | list[int] = None, delay: float = 0.2):
+        attrList = listify(attrs) if attrs is not None else [None]
+        valList = listify(values) if values is not None else [None]
+        cellList = listify(cells)
+        pause = delay / (len(attrList) * len(valList))
+        for attr in attrList:
+            for val in valList:
+                for cell in cellList:
+                    v = val
+                    if v is None:
+                        v = cell.value
+                        if v is None:
+                            v = " "
+                    if attr is None:
+                        attr = curses.A_REVERSE | cell.drawAtrr
+                    self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(v), attr)
+                self.window.refresh()
+                time.sleep(pause)
+        # Put cells back as they were
+        for cell in cellList:
+            v = cell.value
+            if v is None:
+                v = " "
+            self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(v), cell.drawAtrr)
+        self.window.refresh()        
+
+
+
+
+        
     
     def solved(self):
         for row in self.rows:
@@ -431,11 +444,7 @@ class sudoku:
         if not cell.isPotentialValue(value):
             raise BadPuzzleState("Trying to set value for a cell that is not allowed")
         cell.setValue(value)
-        self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value), curses.A_REVERSE | cell.drawAtrr)
-        self.window.refresh()
-        time.sleep(0.2)
-        self.window.addstr(cell.drawPos[0], cell.drawPos[1], str(cell.value), cell.drawAtrr)
-        self.window.refresh()
+        self.flashCellValues(cell)
         self.foundThisPass += 1
         if hasattr(self, "_inPreview") and hasattr(self, "_lookahead") and hasattr(self, "_foundThisPass"):
             if self.foundThisPass - self._foundThisPass > self._lookahead:
@@ -581,17 +590,37 @@ class sudoku:
                 # We need a bit of extra help
                 # Look at the boxes to see if any values must be in certain rows or columns
                 for box in self.boxes:
-                    box.findRowsAndCols(self.setCell, self.window) 
+                    box.findRowsAndCols(self.setCell, self.flashCellValues) 
             if self.foundThisPass == 0:
                 # Even more help required
                 # Look for matching pairs that will exclude other posibilities
                 for group in self.groups():
-                    group.findPairs(self.setCell, self.window)
+                    group.findPairs(self.setCell, self.flashCellValues)
             if self.foundThisPass == 0:
                 # Getting desperate
                 # Look for triples
                 for group in self.groups():
-                    group.findTriples(self.setCell, self.window)
+                    group.findTriples(self.setCell, self.flashCellValues)
+            if self.foundThisPass == 0:
+                # Look for quadrupoles
+                for group in self.groups():
+                    group.findGrouping(4, self.setCell, self.flashCellValues)
+            if self.foundThisPass == 0:
+                # Look for quintuples
+                for group in self.groups():
+                    group.findGrouping(5, self.setCell, self.flashCellValues)
+            if self.foundThisPass == 0:
+                # Look for sextuples
+                for group in self.groups():
+                    group.findGrouping(6, self.setCell, self.flashCellValues)
+            if self.foundThisPass == 0:
+                # Look for sexptuples
+                for group in self.groups():
+                    group.findGrouping(7, self.setCell, self.flashCellValues)
+            if self.foundThisPass == 0:
+                # Look for octuples
+                for group in self.groups():
+                    group.findGrouping(8, self.setCell, self.flashCellValues)
             if self.foundThisPass == 0:
                 # Last resort
                 self.tryAllValues()
