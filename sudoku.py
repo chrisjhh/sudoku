@@ -17,6 +17,8 @@ class BadPuzzleState(Exception):
 class LookAheadExceeded(Exception):
     pass
 
+COLOR_PAIR = [0,0,0,0]
+
 T = TypeVar('T')
 
 def listify(itemOrList: T | list[T]) -> list[T]:
@@ -70,7 +72,7 @@ class Cell:
         if self.complete():
             return
         self._snapshot = self.potentialValues[:]
-        self.drawAtrr = curses.color_pair(3)
+        self.drawAtrr = COLOR_PAIR[3]
 
     def restoreSnapshot(self):
         if self._snapshot is None:
@@ -163,7 +165,7 @@ class CellGroup:
                             if len(cell.potentialValues) > 2:
                                 if not doneFlash:
                                     # Flash the values we are using in cyan the first time they are used
-                                    flashCellValues(cellPair1, (v1,v2), curses.color_pair(2), 0.4)
+                                    flashCellValues(cellPair1, (v1,v2), COLOR_PAIR[2], 0.4)
                                     doneFlash = True
                                 logging.info("Adjusting possible values for pair of {} and {} in {}".format(v1, v2, self))
                                 logging.info("Potential values before {}".format(cell.potentialValues))
@@ -222,7 +224,7 @@ class CellGroup:
                                 if len(cell.potentialValues) > groupSize:
                                     if not doneFlash:
                                         # Flash the values we are using in cyan the first time they are used
-                                        flashCellValues(cellGrouping1, [v1, *matched], curses.color_pair(2), 0.4)
+                                        flashCellValues(cellGrouping1, [v1, *matched], COLOR_PAIR[2], 0.4)
                                         doneFlash = True
                                     cell.potentialValues = [v1, *matched]
                                     logging.info("Potential values after {}".format(cell.potentialValues))
@@ -238,6 +240,10 @@ class CellRow(CellGroup):
         super().__init__(cells)
         for cell in cells:
             cell.row = self
+
+    def stringValue(self):
+        values = [str(c.value) if c.value is not None else '.' for c in self]
+        return "".join(values)
 
 
 class CellCol(CellGroup):
@@ -306,7 +312,7 @@ class CellBox(CellGroup):
                     if x in cell.potentialValues:
                         if not doneFlash:
                             # Flash the values we are using in red the first time they are used
-                            flashCellValues(potentialCells, x, curses.color_pair(1), 0.4)
+                            flashCellValues(potentialCells, x, COLOR_PAIR[1], 0.4)
                             doneFlash = True
                         logging.info("Potential values before {}".format(cell.potentialValues))
                         cell.potentialValues.remove(x)
@@ -373,11 +379,14 @@ class sudoku:
                     row[j].drawAtrr = curses.A_BOLD
 
     def draw(self, window: '_CursesWindow'):
+        global COLOR_PAIR
         window.clear()
         curses.curs_set(False)
         curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
         curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
         curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+        for i in range(1,4):
+            COLOR_PAIR[i] = curses.color_pair(i)
         width = (3 + 4) * 3 + 4
         gap = int((curses.COLS - width) / 2)
         dashRow = "-" * width
@@ -405,6 +414,8 @@ class sudoku:
         window.addstr(y, gap, dashRow)
 
     def flashCellValues(self, cells: Cell | list[Cell], values: int | list[int] = None, attrs: int | list[int] = None, delay: float = 0.2):
+        if self.window is None:
+            return
         attrList = listify(attrs) if attrs is not None else [None]
         valList = listify(values) if values is not None else [None]
         cellList = listify(cells)
@@ -513,9 +524,10 @@ class sudoku:
         for row in self.cells:
             for cell in row:
                 cell.restoreSnapshot()
-                if not cell.complete():
+                if not cell.complete() and self.window is not None:
                     self.window.addstr(cell.drawPos[0], cell.drawPos[1], " ")
-        self.window.refresh()
+        if self.window is not None:
+            self.window.refresh()
         for group in self.groups():
             # Need to revert completed count
             group.recomputeCompleted()
