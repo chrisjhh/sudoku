@@ -25,7 +25,7 @@ def listify(itemOrList: T | list[T]) -> list[T]:
     except TypeError:
         return [itemOrList]
 
-class cell:
+class Cell:
 
     def __init__(self) -> None:
         self.row: CellRow = None
@@ -80,12 +80,12 @@ class cell:
         self._snapshot = None
         self.drawAtrr = 0
 
-setCell: TypeAlias = Callable[[cell, int], None]
-flashCellValues: TypeAlias = Callable[[cell | list[cell], int | list[int], int | list[int], float], None]
+setCell: TypeAlias = Callable[[Cell, int], None]
+flashCellValues: TypeAlias = Callable[[Cell | list[Cell], int | list[int], int | list[int], float], None]
 
 class CellGroup:
 
-    def __init__(self, cells: list[cell]):
+    def __init__(self, cells: list[Cell]):
         self.cells = cells
         self.completed: int = len([x for x in cells if x.complete()])
 
@@ -216,6 +216,8 @@ class CellGroup:
                             logging.info("Found all groupings to make an exclusive set. Remove any other potential values")
                             doneFlash = False
                             for cell in cellGrouping1:
+                                if not isinstance(cell, Cell):
+                                    raise Exception("Not a cell")
                                 logging.info("Potential values before {}".format(cell.potentialValues))
                                 if len(cell.potentialValues) > groupSize:
                                     if not doneFlash:
@@ -232,7 +234,7 @@ class CellGroup:
 
 class CellRow(CellGroup):
 
-    def __init__(self, cells: list[cell]):
+    def __init__(self, cells: list[Cell]):
         super().__init__(cells)
         for cell in cells:
             cell.row = self
@@ -240,12 +242,12 @@ class CellRow(CellGroup):
 
 class CellCol(CellGroup):
 
-    def __init__(self, cells: list[cell]):
+    def __init__(self, cells: list[Cell]):
         super().__init__(cells)
         for cell in cells:
             cell.col = self
 
-def inSameRow(cells: list[cell]) -> bool:
+def inSameRow(cells: list[Cell]) -> bool:
     lastRow = None
     for cell in cells:
         if lastRow is not None and cell.row != lastRow:
@@ -253,7 +255,7 @@ def inSameRow(cells: list[cell]) -> bool:
         lastRow = cell.row
     return True
 
-def inSameCol(cells: list[cell]) -> bool:
+def inSameCol(cells: list[Cell]) -> bool:
     lastCol = None
     for cell in cells:
         if lastCol is not None and cell.col != lastCol:
@@ -263,12 +265,12 @@ def inSameCol(cells: list[cell]) -> bool:
 
 class CellBox(CellGroup):
 
-    def __init__(self, cells: list[cell]):
+    def __init__(self, cells: list[Cell]):
         super().__init__(cells)
         for cell in cells:
             cell.box = self
 
-    def findRowsAndCols(self, setCell, flashCellValues):
+    def findRowsAndCols(self, setCell: setCell, flashCellValues: flashCellValues):
         """We may not be able to pin a value to a unique cell, but if all the possible cells for a value in a box
         occur in the same row or column, then we can use this fact to eliminate this value as a possibility in
         the cells of the same row or column in the other boxes.
@@ -325,11 +327,11 @@ class CellBox(CellGroup):
 class sudoku:
 
     def __init__(self) -> None:
-        self.cells: list[list[cell]] = []
+        self.cells: list[list[Cell]] = []
         for i in range(9):
-            row: list[cell] = []
+            row: list[Cell] = []
             for j in range(9):
-                row.append(cell())
+                row.append(Cell())
             self.cells.append(row)
         # Create the rows
         self.rows: list[CellRow] = []
@@ -345,7 +347,7 @@ class sudoku:
         indexes = [[0,1,2], [3,4,5], [6,7,8]]
         for i in range(3):
             for j in range(3):
-                boxCells: list[cell] = []
+                boxCells: list[Cell] = []
                 for y in indexes[i]:
                     row = self.cells[y]
                     for x in indexes[j]:
@@ -402,7 +404,7 @@ class sudoku:
             nRow += 1
         window.addstr(y, gap, dashRow)
 
-    def flashCellValues(self, cells: cell | list[cell], values: int | list[int] = None, attrs: int | list[int] = None, delay: float = 0.2):
+    def flashCellValues(self, cells: Cell | list[Cell], values: int | list[int] = None, attrs: int | list[int] = None, delay: float = 0.2):
         attrList = listify(attrs) if attrs is not None else [None]
         valList = listify(values) if values is not None else [None]
         cellList = listify(cells)
@@ -439,7 +441,7 @@ class sudoku:
                 return False
         return True
     
-    def setCell(self, cell:cell, value: int):
+    def setCell(self, cell:Cell, value: int):
         logging.info("setCell: value={}".format(value))
         if not cell.isPotentialValue(value):
             raise BadPuzzleState("Trying to set value for a cell that is not allowed")
@@ -521,7 +523,7 @@ class sudoku:
             self.foundThisPass = self._foundThisPass
             delattr(self, "_foundThisPass")
 
-    def trialValue(self, cell: cell, value: int) -> bool:
+    def trialValue(self, cell: Cell, value: int) -> bool:
         logging.info("Trialing {} in {}".format(value, cell))
         self.startPreview()
         initialCount = self.foundThisPass
@@ -601,26 +603,12 @@ class sudoku:
                 # Look for triples
                 for group in self.groups():
                     group.findTriples(self.setCell, self.flashCellValues)
-            if self.foundThisPass == 0:
-                # Look for quadrupoles
-                for group in self.groups():
-                    group.findGrouping(4, self.setCell, self.flashCellValues)
-            if self.foundThisPass == 0:
-                # Look for quintuples
-                for group in self.groups():
-                    group.findGrouping(5, self.setCell, self.flashCellValues)
-            if self.foundThisPass == 0:
-                # Look for sextuples
-                for group in self.groups():
-                    group.findGrouping(6, self.setCell, self.flashCellValues)
-            if self.foundThisPass == 0:
-                # Look for sexptuples
-                for group in self.groups():
-                    group.findGrouping(7, self.setCell, self.flashCellValues)
-            if self.foundThisPass == 0:
-                # Look for octuples
-                for group in self.groups():
-                    group.findGrouping(8, self.setCell, self.flashCellValues)
+            # Look for larger groupings
+            for n in range(4,9):
+                if self.foundThisPass == 0:
+                    # Look for grouping of n
+                    for group in self.groups():
+                        group.findGrouping(n, self.setCell, self.flashCellValues)
             if self.foundThisPass == 0:
                 # Last resort
                 self.tryAllValues()
